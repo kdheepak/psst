@@ -22,7 +22,50 @@ from psst.network import create_network
 from . import graph_styles as style
 
 class NetworkModel(t.HasTraits):
-    """A navigable graph of the network."""
+    """The NetworkModel object is created from a PSSTCase object,
+    using the PSSTNetwork object. It contains state information neccesary
+    to interactively visualize a network.
+
+    Parameters
+    ----------
+    case : PSSTCase
+        An instance of a PSST case.
+    sel_bus : str (Default=None)
+        The name of a bus in the case to focus on.
+
+    Attributes
+    ----------
+    view_buses : :obj:`list` of :obj:`str`
+        The names of the buses to be displayed.
+    pos : pandas.DataFrame
+        All the x,y positions of all the nodes.
+    edges : pandas.DataFrame
+        All the edges between nodes, and their x,y coordiantes.
+    x_edges, y_edges : numpy.Array
+        List of coordinates for 'start' and 'end' node, for all edges in network.
+
+    bus_x_vals, bus_y_vals : numpy.Array
+        Arrays containing coordinates of buses to be displayed.
+    bus_x_edges, bus_y_edges : numpy.Array
+        List of coordinates for 'start' and 'end' bus for each edge to be displayed.
+    bus_names: :obj:`list` of :obj:`str`
+        List of names of buses to be displayed.
+
+    gen_x_vals, gen_y_vals : numpy.Array
+        Arrays containing coordinates of generators to be displayed.
+    gen_x_edges, gen_y_edges : numpy.Array
+        List of coordinates for 'start' and 'end' generator for each edge to be displayed.
+    gen_names: :obj:`list` of :obj:`str`
+        List of names of generators to be displayed.
+
+    load_x_vals, load_y_vals : numpy.Array
+        Arrays containing coordinates of loads to be displayed.
+    load_x_edges, load_y_edges : numpy.Array
+        List of coordinates for 'start' and 'end' bus for each edge to be displayed.
+    load_names: :obj:`list` of :obj:`str`
+        List of names of loads to be displayed.
+
+    """
 
     case = t.Instance(PSSTCase, help='The original PSSTCase')
     network = t.Instance(PSSTNetwork)
@@ -30,9 +73,9 @@ class NetworkModel(t.HasTraits):
 
     sel_bus = t.Unicode(allow_none=True)
     view_buses = t.List(trait=t.Unicode)
-    all_pos = tt.DataFrame(help='Df with all x,y positions of nodes.')
+    all_pos = tt.DataFrame(help='DF with all x,y positions of nodes.')
     pos = tt.DataFrame(help='DF with x,y positions only for display nodes')
-    edges = tt.DataFrame(help='Edges ')
+    edges = tt.DataFrame()
 
     x_edges = tt.Array([])
     y_edges = tt.Array([])
@@ -176,14 +219,41 @@ class NetworkModel(t.HasTraits):
 
 
 class NetworkViewBase(ipyw.VBox):
-    """Create bqplot view of NetworkModel"""
+    """An interactive, navigable display of the network.
+
+    The NetworkViewBase class simply generates an interactive figure,
+    without ipywidget buttons and dropdown menus. The NetworkModel extends
+    this class, adding widget controls.
+
+    Parameters
+    ----------
+    case : PSSTCase
+        An instance of a PSST case.
+    model : NetworkModel
+        An instance of NetworkModel can be passed instead
+        of a case. (Should not pass both.)
+
+    Attributes
+    ----------
+    model : NetworkModel
+        An instance of NetworkModel, containing state information for network.
+    show_gen : Bool
+        Display the points representing generators and connected lines.
+    show_load : Bool
+        Display the points representing loads and connected lines.
+    show_bus_names : Bool
+        Display names next to buses.
+    show_gen_names : Bool
+        Display names next to generators.
+    show_load_names : Bool
+        Display names next to loads.
+    """
 
     model = t.Instance(NetworkModel)
     show_gen = t.Bool(default_value=True)
     show_load = t.Bool(default_value=True)
 
     show_background_lines = t.Bool(default_value=True)
-    # show_labels = t.Bool()
     show_bus_names = t.Bool(default_value=True)
     show_gen_names = t.Bool(default_value=True)
     show_load_names = t.Bool(default_value=True)
@@ -192,16 +262,12 @@ class NetworkViewBase(ipyw.VBox):
         super(NetworkViewBase, self).__init__(*args, **kwargs)
 
         ##################
-        # Store Model
+        # Load and Store Model
         ##################
-        # Todo: Test both constructor options + error message.
-        if model is None:
-            try:
-                self.model = NetworkModel(case)
-            except TypeError:
-                warnings.warn(('To generate an NetworkView, you must provide either'
-                               'an instance of NetworkModel, or a PSSTCase.'))
-                raise Exception()
+        if model and case:
+            warnings.warn('You should pass a case OR a model, not both. The case argument you passed is being ignored.')
+        if not model:
+            self.model = NetworkModel(case)
         else:
             self.model = model
 
@@ -361,11 +427,11 @@ class NetworkViewBase(ipyw.VBox):
         t.link((self, 'show_load_names'), (self._load_scatter, 'display_names'))
 
         # Set callbacks for clicking a bus
-        # (Click -> updates `model.view_buses` -> updates `bus_scatter.selected`)
+        # Click -> updates `model.view_buses` -> updates `bus_scatter.selected`
         self._bus_scatter.on_element_click(self._callback_bus_clicked)
         self.model.observe(self._callback_view_buses_change, names='view_buses')
 
-        # Callbacks for clicking a load/gen (flashes selected)
+        # Callbacks for clicking a load/gen node (Simply flashes selected)
         self._gen_scatter.on_element_click(self._callback_nonebus_clicked)
         self._load_scatter.on_element_click(self._callback_nonebus_clicked)
 
@@ -392,12 +458,12 @@ class NetworkViewBase(ipyw.VBox):
             scatter.stroke = tmp
 
     def _callback_view_buses_change(self, change):
-        """When model.view_buses changes, update selected buses in plot."""
+        """When `model.view_buses` changes, update `selected` buses in plot."""
         idx_list = self._get_indices_view_buses()
         self._bus_scatter.selected = idx_list
 
     def _callback_nonebus_clicked(self, scatter, change):
-        """When a load or generator, let is flash selected."""
+        """When a load or generator is clicked, have it flash selected."""
         scatter.selected = [change['data']['index']]
         time.sleep(.2)
         scatter.selected = []
@@ -407,23 +473,52 @@ class NetworkViewBase(ipyw.VBox):
         """When a bool property that effects which marks to display is changed,
         check the values of all such properties and build the appropriate mark list."""
         mark_names = list(self._all_marks)  # Get just the names (keys)
-        if not self.show_gen:
+        if self.show_gen is False:
             mark_names.remove('gen_scatter')
             mark_names.remove('gen_lines')
-        if not self.show_load:
+        if self.show_load is False:
             mark_names.remove('load_scatter')
             mark_names.remove('load_lines')
-        if not self.show_background_lines:
+        if self.show_background_lines is False:
             mark_names.remove('background_lines')
         new_marks = [self._all_marks[k] for k in mark_names]
         self._figure.marks = new_marks
 
     def reset_view(self):
+        """Reset the displayed buses to reflect `model.sel_bus`,
+        undoing any changes caused by clicking."""
         self.model.reset_view_buses()
 
 
 class NetworkView(NetworkViewBase):
-    """Create bqplot view of ExploreNetworkModel"""
+    """Create an interactive, navigable display of the network, with widget controls.
+
+    This class extends NetworkViewBase, adding ipywidget buttons, dropdowns,
+    and checkboxes on top of the core, interactive network graph.
+
+    Parameters
+    ----------
+    case : PSSTCase
+        An instance of a PSST case.
+    model : NetworkModel
+        An instance of NetworkModel can be passed instead
+        of a case. (Should not pass both.)
+
+    Attributes
+    ----------
+    model : NetworkModel
+        An instance of NetworkModel, containing state information for network.
+    show_gen : Bool
+        Display the points representing generators and connected lines.
+    show_load : Bool
+        Display the points representing loads and connected lines.
+    show_bus_names : Bool
+        Display names next to buses.
+    show_gen_names : Bool
+        Display names next to generators.
+    show_load_names : Bool
+        Display names next to loads.
+    """
 
     def __init__(self, case=None, model=None, *args, **kwargs):
         super(NetworkView, self).__init__(case, model, *args, **kwargs)
@@ -517,9 +612,7 @@ class NetworkView(NetworkViewBase):
         # Callback for reset button press.
         self._reset.on_click(self._callback_reset_press)
 
-        # Callback for options checkbox press
-        self.model.observe(self._callback_view_buses_change, names='view_buses')
-
     def _callback_reset_press(self, change):
+        """When reset button is pressed, call reset_view,
+        undoing changes to `model.view_buses` made by clicking."""
         self.reset_view()
-
