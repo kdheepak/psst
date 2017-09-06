@@ -117,6 +117,7 @@ def solve(data, solver):
         branch_df=pd.read_csv(os.path.join(data, './branch.csv'), index_col=0),
         bus_df=pd.read_csv(os.path.join(data, './bus.csv'), index_col=0),
         base_MVA=100,
+        generator_status={},
     )
     model.solve(solver=solver, verbose=True)
     model._model.pprint()
