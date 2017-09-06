@@ -39,6 +39,7 @@ def build_model(case,
                 branch_df=None,
                 bus_df=None,
                 previous_unit_commitment_df=None,
+                generator_status=None,
                 base_MVA=None,
                 base_KV=1,
                 config=None):
@@ -67,6 +68,8 @@ def build_model(case,
         branch_df = case.branch
     if bus_df is None:
         bus_df = case.bus
+    if generator_status is None:
+        generator_status = case.generator_status
 
     branch_df.index = branch_df.index.astype(object)
     generator_df.index = generator_df.index.astype(object)
@@ -223,9 +226,9 @@ def build_model(case,
 
     # setup start up and shut down costs for generators
 
-    hot_start_costs = case.gencost['STARTUP'].to_dict()
-    cold_start_costs = case.gencost['STARTUP'].to_dict()
-    shutdown_costs = case.gencost['SHUTDOWN'].to_dict()
+    hot_start_costs = generator_df['STARTUP'].to_dict()
+    cold_start_costs = generator_df['STARTUP'].to_dict()
+    shutdown_costs = generator_df['SHUTDOWN'].to_dict()
 
     hot_start_cold_start_costs(model, hot_start_costs=hot_start_costs, cold_start_costs=cold_start_costs, shutdown_cost_coefficient=shutdown_costs)
 
@@ -268,11 +271,12 @@ def build_model(case,
     # Add objective function
     objective_function(model)
 
-    for t, row in case.gen_status.iterrows():
-        for g, v in row.iteritems():
-            if not pd.isnull(v):
-                model.UnitOn[g, t].fixed = True
-                model.UnitOn[g, t] = int(float(v))
+    if isinstance(generator_status, pd.DataFrame):
+        for t, row in generator_status.iterrows():
+            for g, v in row.iteritems():
+                if not pd.isnull(v):
+                    model.UnitOn[g, t].fixed = True
+                    model.UnitOn[g, t] = int(float(v))
 
     model.dual = Suffix(direction=Suffix.IMPORT)
 
