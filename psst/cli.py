@@ -105,5 +105,21 @@ def sced(uc, data, output, solver):
         f.write("\nEND_HAS_SOLUTION\n")
 
 
+@cli.command()
+@click.option('--data', default=None, type=click.Path(), help='Path to model data')
+@click.option('--solver', default=SOLVER)
+def solve(data, solver):
+
+    model = build_model(
+        case=None,
+        generator_df=pd.read_csv(os.path.join(data, './generator.csv'), index_col=0),
+        load_df=pd.read_csv(os.path.join(data, './load.csv'), index_col=0),
+        branch_df=pd.read_csv(os.path.join(data, './branch.csv'), index_col=0),
+        bus_df=pd.read_csv(os.path.join(data, './bus.csv'), index_col=0)
+    )
+    model.solve(solver=solver, verbose=True)
+    model._model.pprint()
+
+
 if __name__ == "__main__":
     cli()
