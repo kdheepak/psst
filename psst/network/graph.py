@@ -17,9 +17,10 @@ import itertools
 import time
 
 from psst.case import PSSTCase
-from psst.network import PSSTNetwork
-from psst.network import create_network
+from psst.network import PSSTNetwork, create_network
+from psst.model import PSSTModel, build_model
 from . import graph_styles as style
+
 
 class NetworkModel(t.HasTraits):
     """The NetworkModel object is created from a PSSTCase object,
@@ -32,6 +33,8 @@ class NetworkModel(t.HasTraits):
         An instance of a PSST case.
     sel_bus : str (Default=None)
         The name of a bus in the case to focus on.
+    solver : str (Default='glpk')
+        The name of the mixed integer solver you wish to use
 
     Attributes
     ----------
@@ -70,10 +73,12 @@ class NetworkModel(t.HasTraits):
     case = t.Instance(PSSTCase, help='The original PSSTCase')
     network = t.Instance(PSSTNetwork)
     G = t.Instance(nx.Graph)
+    model = t.Instance(PSSTModel, allow_none=True)
 
     sel_bus = t.Unicode(allow_none=True)
     view_buses = t.List(trait=t.Unicode)
     all_pos = tt.DataFrame(help='DF with all x,y positions of nodes.')
+    all_edges = tt.DataFrame()
     pos = tt.DataFrame(help='DF with x,y positions only for display nodes')
     edges = tt.DataFrame()
 
@@ -105,7 +110,7 @@ class NetworkModel(t.HasTraits):
 
     _VIEW_OFFSET = 50
 
-    def __init__(self, case, sel_bus=None, *args, **kwargs):
+    def __init__(self, case, sel_bus=None, solver='glpk', *args, **kwargs):
         super(NetworkModel, self).__init__(*args, **kwargs)
 
         # Store PPSTCase, PSSTNetwork, and networkx.Graph
@@ -113,11 +118,16 @@ class NetworkModel(t.HasTraits):
         self.network = create_network(case=self.case)
         self.G = self.network.graph
 
+        # Try to solve model
+        self.model = build_model(self.case)
+        self.model.solve(solver=solver)
+
         # Make full pos DF.
         self.all_pos = pd.DataFrame(self.network.positions, index=['x', 'y']).T
 
-        # Make full edges DF, with coordinates
+        # Make full edges DF, with coordinates and branch index
         self.all_edges = pd.DataFrame.from_records(self.G.edges(), columns=['start', 'end'])
+        # ---> Add coordinates
         self.all_edges['start_x'] = self.all_edges['start'].map(
             lambda e: self.all_pos.loc[e]['x'])
         self.all_edges['end_x'] = self.all_edges['end'].map(
@@ -126,26 +136,32 @@ class NetworkModel(t.HasTraits):
             lambda e: self.all_pos.loc[e]['y'])
         self.all_edges['end_y'] = self.all_edges['end'].map(
             lambda e: self.all_pos.loc[e]['y'])
+        # ---> Add branch index
+        # new = case.branch[['F_BUS', 'T_BUS']]
+        # new = new.reset_index()
+        # new = new.rename_axis({'F_BUS': 'start', 'T_BUS': 'end', 'index': 'branch_idx'}, axis=1)
+        # self.all_edges = pd.merge(self.all_edges, new, on=['start', 'end'], how='outer')
 
         # Make df with all edge data
         self.x_edges = [tuple(edge) for edge in self.all_edges[['start_x', 'end_x']].values]
         self.y_edges = [tuple(edge) for edge in self.all_edges[['start_y', 'end_y']].values]
 
         # Set 'start' and 'end' as index for all_edges df
+        # Todo: Refactor so this happens later.
         self.all_edges.set_index(['start', 'end'], inplace=True)
 
         # Set 'sel_bus' (this should in turn set other variables)
         self.sel_bus = sel_bus
-
-    @t.observe('sel_bus')
-    def _callback_selection_change(self, change):
-        self.reset_view_buses()
 
     def reset_view_buses(self):
         if self.sel_bus is None:
             self.view_buses = list(self.case.bus_name)
         else:
             self.view_buses = [self.sel_bus]
+
+    @t.observe('sel_bus')
+    def _callback_selection_change(self, change):
+        self.reset_view_buses()
 
     @t.observe('view_buses')
     def _callback_view_change(self, change):
@@ -196,24 +212,23 @@ class NetworkModel(t.HasTraits):
         self.y_min_view = self.pos.y.min() - self._VIEW_OFFSET
 
     def subset_positions(self):
-        """Subset self.all_pos based on view_buses list."""
-        nodes = [list(self.G.adj[item].keys()) for item in self.view_buses]
-        nodes = set(itertools.chain.from_iterable(nodes))
-        nodes.update(self.view_buses)
-        return self.all_pos.loc[nodes]
+        """Subset self.all_pos to include only nodes adjacent to those in view_buses list."""
+        nodes = [list(self.G.adj[item].keys()) for item in self.view_buses]  # get list of nodes adj to selected buses
+        nodes = set(itertools.chain.from_iterable(nodes))  # chain lists together, eliminate duplicates w/ set
+        nodes.update(self.view_buses)  # Add the view_buses themselves to the set
+        return self.all_pos.loc[nodes]  # Subset df of all positions to include only desired nodes.
 
     def subset_edges(self):
-        """Subset G.edges based on view_buses list."""
-        edge_list_fwd = self.G.edges(nbunch=self.view_buses)
-        edge_list_rev = [tuple(reversed(tup)) for tup in edge_list_fwd]
-        edges_fwd = self.all_edges.loc[edge_list_fwd].dropna()
-        edges_rev = self.all_edges.loc[edge_list_rev].dropna()
-        edges = edges_fwd.append(edges_rev)
-        edges.unstack()
+        """Subset all_edges, with G.edges() info, based on view_buses list."""
+        edge_list = self.G.edges(nbunch=self.view_buses)  # get edges of view_buses as list of tuples
+        edges_fwd = self.all_edges.loc[edge_list]  # query all_pos with edge_list
+        edge_list_rev = [tuple(reversed(tup)) for tup in edge_list]  # reverse tuples as order may be swapped in all_pos
+        edges_rev = self.all_edges.loc[edge_list_rev]  # query all_pos again, with reversed edge_list
+        edges = edges_fwd.append(edges_rev).dropna(subset=['start_x'])  # combine results, dropping false hits
         return edges
 
     def __repr__(self):
-        s = ('ExploreNetworkModel Object\n'
+        s = ('NetworkModel Object\n'
              'sel_bus={}; view_buses={}').format(self.sel_bus, self.view_buses)
         return s
 
@@ -287,6 +302,13 @@ class NetworkViewBase(ipyw.VBox):
             'y': self._scale_y,
         }
 
+        # Temp/experimental.
+        self._my_scales = {
+            'x': self._scale_x,
+            'y': self._scale_y,
+            'color': bq.ColorScale(colors=['Red', 'Green']),
+        }
+
         ##################
         # Scatter Marks
         ##################
@@ -300,7 +322,7 @@ class NetworkViewBase(ipyw.VBox):
             marker='rectangle', default_size=180,
             colors=[style.graph_main_1], default_opacities=[0.6],
             selected_style={'opacity': 0.8, 'fill': style.graph_selected_1,
-                            'stroke':style.graph_accent_1},
+                            'stroke': style.graph_accent_1},
             selected=self._get_indices_view_buses(),
             tooltip=scatter_tooltip,
         )
@@ -328,24 +350,34 @@ class NetworkViewBase(ipyw.VBox):
         ##################
         # Line Marks
         ##################
+
+        # import numpy as np
+        # self.vals = np.random.randint(0, 2, size=len(self.model.bus_x_edges))
+
         # Create Bus Lines
         self._bus_lines = bq.Lines(
             x=self.model.bus_x_edges, y=self.model.bus_y_edges,
-            scales=self._scales, colors=[style.graph_line_1],
+            scales=self._scales,
+            # colors=vals.
+            colors=[style.graph_line_1],
             stroke_width=2, line_style='solid',
             opacities=[0.8],
         )
         # Create Gen Lines
         self._gen_lines = bq.Lines(
             x=self.model.gen_x_edges, y=self.model.gen_y_edges,
-            scales=self._scales, colors=[style.graph_line_2],
+            scales=self._scales,
+            # colors=['black'],
+            colors=[style.graph_line_2],
             stroke_width=1.5, line_style='solid',
             opacities=[0.8]
         )
         # Create Load Lines
         self._load_lines = bq.Lines(
             x=self.model.load_x_edges, y=self.model.load_y_edges,
-            scales=self._scales, colors=[style.graph_line_3],
+            scales=self._scales,
+            # colors=['black'],
+            colors=[style.graph_line_3],
             stroke_width=1.5, line_style='solid',
             opacities=[0.8],
         )

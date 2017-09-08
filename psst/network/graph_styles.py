@@ -26,7 +26,7 @@ graph_line_1 = colors.blue1
 graph_line_2 = colors.green1
 graph_line_3 = colors.orange1
 
-graph_section_border = 'Blue'
+graph_section_border = 'Gray'
 graph_subsection_border = 'Gray'
 
 
