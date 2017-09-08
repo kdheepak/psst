@@ -17,3 +17,4 @@ __pycache__
 .#*
 .coverage
 *.swp
+docs/_generate
