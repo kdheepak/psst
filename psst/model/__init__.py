@@ -164,7 +164,7 @@ def build_model(case,
     if previous_unit_commitment_df is None:
         previous_unit_commitment = dict()
         for g in generator_df.index:
-            previous_unit_commitment[g] = [0] * len(load_df)
+            previous_unit_commitment[g] = [1] * len(load_df)
         previous_unit_commitment_df = pd.DataFrame(previous_unit_commitment)
         previous_unit_commitment_df.index = load_df.index
 
