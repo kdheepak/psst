@@ -237,12 +237,19 @@ def build_model(case,
             points[i] = p
             values[i] = v
 
+    zero_cost_generators = []
     for k, v in points.items():
         points[k] = [float(i) for i in v]
         assert len(points[k]) >= 2, "Points must be of length 2 but instead found {points} for {genco}".format(points=points[k], genco=k)
     for k, v in values.items():
         values[k] = [float(i) for i in v]
         assert len(values[k]) >= 2, "Values must be of length 2 but instead found {values} for {genco}".format(values=values[k], genco=k)
+        if any(values[k]) is False:
+            zero_cost_generators.append(k)
+
+    for g in zero_cost_generators:
+        points[g] = [min(points[g]), max(points[g])]
+        values[g] = [min(values[g]), max(values[g])]
 
     piece_wise_linear_cost(model, points, values)
 

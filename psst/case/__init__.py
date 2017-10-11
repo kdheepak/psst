@@ -118,10 +118,6 @@ class PSSTCase(object):
         mpc.gen['SHUTDOWN_RAMP'] = mpc.gen['PMAX']
         mpc.gen['MINIMUM_UP_TIME'] = 0
         mpc.gen['MINIMUM_DOWN_TIME'] = 0
-        try:
-            mpc.gencost.loc[mpc.gencost['COST_2'] == 0, 'NCOST'] = 2
-        except KeyError as e:
-            logger.warning(e)
 
         mpc.gen_status = pd.DataFrame([mpc.gen['GEN_STATUS'] for i in mpc.load.index])
         mpc.gen_status.index = mpc.load.index
