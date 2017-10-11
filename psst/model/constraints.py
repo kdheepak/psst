@@ -48,8 +48,7 @@ def power_balance(m, b, t, has_storage=False, has_non_dispatchable_generators=Fa
     # bus b, time t (S)
 
     constraint = m.NetPowerInjectionAtBus[b, t] + sum(m.LinePower[l,t] for l in m.LinesTo[b]) \
-           - sum(m.LinePower[l,t] for l in m.LinesFrom[b]) \
-           + m.LoadGenerateMismatch[b,t] == 0
+           - sum(m.LinePower[l,t] for l in m.LinesFrom[b]) == 0
 
     return constraint
 
