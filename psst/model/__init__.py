@@ -81,7 +81,11 @@ def build_model(case,
         warnings.warn("Generators with zero PMAX found: {}".format(zero_generation))
     generator_df.loc[generator_df['PMAX'] == 0, 'PMAX'] = 0.01
 
-    generator_df['RAMP'] = generator_df['RAMP_10'] * 6
+    try:
+        generator_df['RAMP'] = generator_df['RAMP_AGC']
+    except Exception as e:
+        logger.exception("Unable to set ramp rates to ramp_agc: {}".format(e))
+        generator_df['RAMP'] = generator_df['RAMP_10']
 
     if timeseries_pmax is None:
         timeseries_pmax = generator_df["PMAX"].to_dict()
@@ -335,19 +339,22 @@ class PSSTModel(object):
 
         return string
 
-    def solve(self, solver='glpk', verbose=False, keepfiles=False, resolve=False, **kwargs):
+    def solve(self, solver='glpk', verbose=False, keepfiles=False, **kwargs):
         if solver == 'xpress':
-            resolve = True
+            resolve = kwargs.pop("resolve", True)
+        else:
+            resolve = kwargs.pop("resolve", False)
 
         solve_model(self._model, solver=solver, verbose=verbose, keepfiles=keepfiles, **kwargs)
         self._results = PSSTResults(self)
 
-        if resolve:
+        if resolve is True:
+            logger.info("Resolving")
             for t, row in self.results.unit_commitment.iterrows():
                 for g, v in row.iteritems():
                     if not pd.isnull(v):
                         self._model.UnitOn[g, t].fixed = True
-                        self._model.UnitOn[g, t] = int(float(v))
+                        self._model.UnitOn[g, t] = int(float(round(v)))
 
             solve_model(self._model, solver=solver, verbose=verbose, keepfiles=keepfiles, is_mip=False, **kwargs)
             self._results = PSSTResults(self)

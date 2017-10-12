@@ -63,7 +63,7 @@ def initialize_model(model,
 
     model.TotalDemand = Var(model.TimePeriods, within=NonNegativeReals)
 
-    BigPenalty = config.pop('penalty', 1e10)
+    BigPenalty = config.pop('penalty', 1e7)
     #\Lambda
     model.LoadMismatchPenalty = Param(within=NonNegativeReals, default=BigPenalty)
 
