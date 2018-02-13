@@ -32,8 +32,6 @@ def derive_network(model,
     model.LinesFrom = Set(model.Buses, initialize=lines_from)
 
 
-
-
 def _get_b_from_Reactance(m, l):
     if m.Reactance[l] < 0:
         return 0

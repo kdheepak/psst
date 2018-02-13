@@ -3,11 +3,14 @@ import warnings
 
 import pandas as pd
 
+import pyomo.environ as env
+
 from .model import (create_model, initialize_buses,
                 initialize_time_periods, initialize_model, Suffix
                     )
 from .network import (initialize_network, derive_network, calculate_network_parameters, enforce_thermal_limits)
-from .generators import (initialize_generators, initial_state, maximum_minimum_power_output_generators,
+from .generators import (initialize_generators, initialize_thermal_generators, initialize_renewable_generators,
+                            initialize_hydro_generators, initial_state, maximum_minimum_power_output_generators,
                         ramp_up_ramp_down_limits, start_up_shut_down_ramp_limits, minimum_up_minimum_down_time,
                         fuel_cost, piece_wise_linear_cost,
                         production_cost, minimum_production_cost,
@@ -15,17 +18,23 @@ from .generators import (initialize_generators, initial_state, maximum_minimum_p
                         forced_outage,
                         generator_bus_contribution_factor)
 
-from .reserves import initialize_global_reserves, initialize_regulating_reserves, initialize_zonal_reserves
+from .reserves import (initialize_global_reserves, initialize_spinning_reserves, 
+                       initialize_regulating_reserves_requirement, initialize_regulating_reserves,
+                       initialize_flexible_ramp_reserves, initialize_flexible_ramp, initialize_zonal_reserves)
+                       
 from .demand import (initialize_demand)
 
-from .constraints import (constraint_line, constraint_total_demand, constraint_net_power,
+from .constraints import (constraint_total_demand, constraint_net_power,
                         constraint_load_generation_mismatch,
                         constraint_power_balance,
                         constraint_reserves,
                         constraint_generator_power,
-                        constraint_up_down_time,
+                        constraint_up_down_time, 
+                        constraint_line, 
                         constraint_for_cost,
-                        objective_function)
+                        objective_function,
+                        constraint_for_Flexible_Ramping,
+                        )
 
 from ..solver import solve_model, PSSTResults
 from ..case.utils import calculate_PTDF
@@ -35,14 +44,17 @@ logger = logging.getLogger(__file__)
 
 def build_model(case,
                 generator_df=None,
+                renew_gen_df=None,
+                hydro_gen_df=None,
                 load_df=None,
                 branch_df=None,
                 bus_df=None,
                 previous_unit_commitment_df=None,
-                timeseries_pmax=None,
-                timeseries_pmin=None,
                 base_MVA=None,
-                base_KV=1,
+                generator_status=None,
+                reserve_factor=None,
+                regulating_reserve_factor=None,
+                flexible_ramp_factor=None,
                 config=None):
 
     if base_MVA is None:
@@ -55,44 +67,49 @@ def build_model(case,
     # Get configuration parameters from dictionary
     use_ptdf = config.pop('use_ptdf', False)
     segments = config.pop('segments', 2)
-    try:
-        reserve_factor = case.reserve_factor
-    except AttributeError:
-        reserve_factor = config.pop('reserve_factor', 0)
+    # reserve_price = config.pop('reserve_price',  0)
+    has_global_reserves = config.pop("has_global_reserves", True)
+    resolve = config.pop("resolve", False)
+    market_type = config.pop("market_type", "day_ahead") # real_time, hourly_ahead
+    
+    if reserve_factor is None:
+        reserve_factor = 0
 
+    if regulating_reserve_factor is None:
+        reserve_factor = 0
+        
+    if flexible_ramp_factor is None:
+        flexible_ramp_factor = 0         
+        
     # Get case data
-    generator_df = generator_df or pd.merge(case.gen, case.gencost, left_index=True, right_index=True)
-    load_df = load_df or case.load
-    branch_df = branch_df or case.branch
-    bus_df = bus_df or case.bus
+    generator_df = generator_df
+    renew_gen_df = renew_gen_df
+    hydro_gen_df=hydro_gen_df
+    load_df = load_df 
+    branch_df = branch_df 
+    bus_df = bus_df 
 
     branch_df.index = branch_df.index.astype(object)
     generator_df.index = generator_df.index.astype(object)
+    renew_gen_df.index = renew_gen_df.index.astype(object) 
+    hydro_gen_df.index=hydro_gen_df.index.astype(object)    
     bus_df.index = bus_df.index.astype(object)
     load_df.index = load_df.index.astype(object)
 
     branch_df = branch_df.astype(object)
     generator_df = generator_df.astype(object)
+    renew_gen_df = renew_gen_df.astype(object)
+    hydro_gen_df = hydro_gen_df.astype(object) 
     bus_df = bus_df.astype(object)
     load_df = load_df.astype(object)
 
     zero_generation = list(generator_df[generator_df['PMAX'] == 0].index)
     if zero_generation:
         warnings.warn("Generators with zero PMAX found: {}".format(zero_generation))
-    generator_df.loc[generator_df['PMAX'] == 0, 'PMAX'] = 0.01
+    generator_df.loc[generator_df['PMAX'] == 0, 'PMAX'] = 0
 
-    try:
-        generator_df['RAMP'] = generator_df['RAMP_AGC']
-    except Exception as e:
-        logger.exception("Unable to set ramp rates to ramp_agc: {}".format(e))
-        generator_df['RAMP'] = generator_df['RAMP_10']
-
-    if timeseries_pmax is None:
-        timeseries_pmax = generator_df["PMAX"].to_dict()
-
-    if timeseries_pmin is None:
-        timeseries_pmin = generator_df["PMIN"].to_dict()
-
+    generator_df['RAMP'] = generator_df['RAMP_10']
+    
     # Build model information
 
     model = create_model()
@@ -115,45 +132,57 @@ def build_model(case,
     enforce_thermal_limits(model, thermal_limit=branch_df['RATE_A'].to_dict())
 
     # Build generator data
+    
+    tmp_df = generator_df[generator_df["GEN_TYPE"] == "Thermal"]
+    thermal_generator_names = tmp_df.index
+     
+    initialize_thermal_generators(model, 
+                            thermal_generator_names=thermal_generator_names)
+
+    tmp_df = generator_df[generator_df["GEN_TYPE"] == "Renewable"]
+    renewable_generator_names = tmp_df.index
+    
+    # Build renewable time series forecast data for their maximum power output
+    renew_gen_dict = dict()
+    columns = renew_gen_df.columns
+    for i, t in renew_gen_df.iterrows():
+        for col in columns:
+            renew_gen_dict[(col, i)] = t[col] 
+                                                                       
+    initialize_renewable_generators(model,renewable_generator_names=renewable_generator_names,renewable_gen=renew_gen_dict)
+
+    tmp_df = generator_df[generator_df["GEN_TYPE"] == "Hydro"]
+    hydro_generator_names = tmp_df.index
+
+    # Build hydro unit time series forecast data for their maximum power output
+    hydro_gen_dict = dict()
+    columns = hydro_gen_df.columns
+    for i, t in hydro_gen_df.iterrows():
+        for col in columns:
+            hydro_gen_dict[(col, i)] = t[col]             
+                                    
+    initialize_hydro_generators(model,hydro_generator_names=hydro_generator_names,hydro_gen=hydro_gen_dict)    
 
     generator_at_bus = {b: list() for b in generator_df['GEN_BUS'].unique()}
 
     for i, g in generator_df.iterrows():
         generator_at_bus[g['GEN_BUS']].append(i)
 
-    initialize_generators(
-        model,
-        generator_names=generator_df.index,
-        generator_at_bus=generator_at_bus
-    )
+    initialize_generators(model,
+                        generator_at_bus=generator_at_bus)
+                        
+    model.reserve_price = env.Param(model.Generators, default=0, initialize=generator_df["RESERVE_PRICE"].to_dict())
+
+    model.regulation_price = env.Param(model.Generators, default=0, initialize=generator_df["REGULATION_PRICE"].to_dict())
+
+    model.vom_price = env.Param(model.Generators, default=0, initialize=generator_df["VOM"].to_dict())
+                                                            
     fuel_cost(model)
-
-    def initialize_maximum_power_output(m, g, t):
-        number_of_hours = len(load_df.index)
-        v = timeseries_pmax[g]
-        try:
-            len(v)
-        except:
-            v = [v for i in range(0, number_of_hours)]
-
-        assert len(v) == number_of_hours, "Expected number of elements for generator {g} = {number_of_hours} but found {l}".format(g=g, number_of_hours=number_of_hours, l=len(v))
-        return v[t]
-
-    def initialize_minimum_power_output(m, g, t):
-        number_of_hours = len(load_df.index)
-        v = timeseries_pmin[g]
-        try:
-            len(v)
-        except:
-            v = [v for i in range(0, number_of_hours)]
-
-        assert len(v) == number_of_hours, "Expected number of elements for generator {g} = {number_of_hours} but found {l}".format(g=g, number_of_hours=number_of_hours, l=len(v))
-        return v[t]
-
-    maximum_minimum_power_output_generators(
-        model,
-        minimum_power_output=initialize_minimum_power_output,
-        maximum_power_output=initialize_maximum_power_output)
+    
+    
+    maximum_minimum_power_output_generators(model,
+                                        minimum_power_output=generator_df['PMIN'].to_dict(),
+                                        maximum_power_output=generator_df['PMAX'].to_dict())
 
     ramp_up_ramp_down_limits(model, ramp_up_limits=generator_df['RAMP'].to_dict(), ramp_down_limits=generator_df['RAMP'].to_dict())
 
@@ -168,7 +197,7 @@ def build_model(case,
     if previous_unit_commitment_df is None:
         previous_unit_commitment = dict()
         for g in generator_df.index:
-            previous_unit_commitment[g] = [1] * len(load_df)
+            previous_unit_commitment[g] = [0] * len(load_df)
         previous_unit_commitment_df = pd.DataFrame(previous_unit_commitment)
         previous_unit_commitment_df.index = load_df.index
 
@@ -200,6 +229,7 @@ def build_model(case,
     # TODO : Add segments to config
 
     for i, g in generator_df.iterrows():
+
 
         if g['MODEL'] == 2:
 
@@ -241,19 +271,12 @@ def build_model(case,
             points[i] = p
             values[i] = v
 
-    zero_cost_generators = []
     for k, v in points.items():
         points[k] = [float(i) for i in v]
         assert len(points[k]) >= 2, "Points must be of length 2 but instead found {points} for {genco}".format(points=points[k], genco=k)
     for k, v in values.items():
         values[k] = [float(i) for i in v]
         assert len(values[k]) >= 2, "Values must be of length 2 but instead found {values} for {genco}".format(values=values[k], genco=k)
-        if any(values[k]) is False:
-            zero_cost_generators.append(k)
-
-    for g in zero_cost_generators:
-        points[g] = [min(points[g]), max(points[g])]
-        values[g] = [min(values[g]), max(values[g])]
 
     piece_wise_linear_cost(model, points, values)
 
@@ -262,9 +285,9 @@ def build_model(case,
 
     # setup start up and shut down costs for generators
 
-    hot_start_costs = case.gencost['STARTUP'].to_dict()
-    cold_start_costs = case.gencost['STARTUP'].to_dict()
-    shutdown_costs = case.gencost['SHUTDOWN'].to_dict()
+    hot_start_costs = generator_df['STARTUP'].to_dict()
+    cold_start_costs = generator_df['STARTUP'].to_dict()
+    shutdown_costs = generator_df['SHUTDOWN'].to_dict()
 
     hot_start_cold_start_costs(model, hot_start_costs=hot_start_costs, cold_start_costs=cold_start_costs, shutdown_cost_coefficient=shutdown_costs)
 
@@ -281,19 +304,16 @@ def build_model(case,
     initialize_model(model)
 
     initialize_global_reserves(model, reserve_factor=reserve_factor)
+    initialize_spinning_reserves(model, )
+    initialize_regulating_reserves_requirement(model, regulating_reserve_factor=regulating_reserve_factor)
     initialize_regulating_reserves(model, )
+    initialize_flexible_ramp_reserves(model, )
+    initialize_flexible_ramp(model, flexible_ramp_factor=flexible_ramp_factor)
     # initialize_zonal_reserves(model, )
 
     # impose Pyomo Constraints
 
     constraint_net_power(model)
-
-    if use_ptdf is True:
-        ptdf = calculate_PTDF(case, precision=config.pop('ptdf_precision', None), tolerance=config.pop('ptdf_tolerance', None))
-        constraint_line(model, ptdf=ptdf)
-    else:
-        constraint_line(model, slack_bus=bus_df.index.get_loc(bus_df[bus_df['TYPE'] == 3].index[0])+1)
-        # Pyomo is 1-indexed for sets, and MATPOWER type of bus should be used to get the slack bus
 
     constraint_power_balance(model)
 
@@ -301,17 +321,27 @@ def build_model(case,
     constraint_load_generation_mismatch(model)
     constraint_reserves(model)
     constraint_generator_power(model)
-    constraint_up_down_time(model)
+    constraint_up_down_time(model,resolve=resolve)
+    constraint_line(model) 
     constraint_for_cost(model)
 
+    if market_type == "day_ahead":
+          constraint_for_Flexible_Ramping(model)
+    elif market_type == "hourly_ahead":
+          constraint_for_Flexible_Ramping(model)
+    elif market_type == "real_time":
+          constraint_for_Flexible_Ramping(model)
+    else:
+          raise NotImplementedError("Unknown market type {}".format(market_type))
+  # 
     # Add objective function
     objective_function(model)
 
-    for t, row in case.gen_status.iterrows():
-        for g, v in row.iteritems():
-            if not pd.isnull(v):
-                model.UnitOn[g, t].fixed = True
-                model.UnitOn[g, t] = int(float(v))
+    # for t, row in generator_status.iterrows():
+    #     for g, v in row.iteritems():
+    #         if not pd.isnull(v):
+    #             model.UnitOn[g, t].fixed = True
+    #             model.UnitOn[g, t] = int(float(v))
 
     model.dual = Suffix(direction=Suffix.IMPORT)
 
@@ -339,22 +369,25 @@ class PSSTModel(object):
 
         return string
 
-    def solve(self, solver='glpk', verbose=False, keepfiles=False, **kwargs):
-        if solver == 'xpress':
-            resolve = kwargs.pop("resolve", True)
-        else:
-            resolve = kwargs.pop("resolve", False)
+    def solve(self, solver='glpk', verbose=False, keepfiles=False, resolve=False,  **kwargs):
 
         solve_model(self._model, solver=solver, verbose=verbose, keepfiles=keepfiles, **kwargs)
         self._results = PSSTResults(self)
-
-        if resolve is True:
-            logger.info("Resolving")
+        
+        if solver == 'xpress':
+            resolve = True    
+                
+        if resolve:
             for t, row in self.results.unit_commitment.iterrows():
                 for g, v in row.iteritems():
                     if not pd.isnull(v):
                         self._model.UnitOn[g, t].fixed = True
-                        self._model.UnitOn[g, t] = int(float(round(v)))
+                        self._model.UnitOn[g, t] = int(float(v))
+                        
+            self._model.EnforceUpTimeConstraintsInitial.deactivate()
+            self._model.EnforceUpTimeConstraintsSubsequent.deactivate()
+            self._model.EnforceDownTimeConstraintsInitial.deactivate()
+            self._model.EnforceDownTimeConstraintsSubsequent.deactivate()
 
             solve_model(self._model, solver=solver, verbose=verbose, keepfiles=keepfiles, is_mip=False, **kwargs)
             self._results = PSSTResults(self)

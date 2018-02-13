@@ -58,6 +58,17 @@ class PSSTResults(object):
         return self._get('PowerGenerated', self._model)
 
     @property
+    def renewable_power_forecast(self):
+        return self._get('renewable_power', self._model)
+
+    @property
+    def Demand_shed(self):
+        m = self._model
+        st = 'SecondStage'
+        return sum(m.LoadGenerateMismatch[b, t].value \
+                for b in m.Buses for t in m.GenerationTimeInStage[st] if t < self._maximum_hours)
+
+    @property
     def regulating_reserve_up_available(self):
         return self._get('RegulatingReserveUpAvailable', self._model)
 
@@ -73,14 +84,21 @@ class PSSTResults(object):
     def lmp(self):
         return self._get('PowerBalance', self._model, dual=True)
 
+    @property
+    def mcp_reserve(self):
+        return self._get('EnforceReserveRequirements', self._model, dual=True)
+
     @staticmethod
     def _get(attribute, model, set1=None, set2=None, dual=False):
         _dict = dict()
 
         if set1 is not None and set2 is None:
             for s1 in set1:
-                _dict[s1] = getattr(model, attribute)[s1]
-
+      #          _dict[s1] = getattr(model, attribute)[s1]
+                    if dual is True:
+                        _dict[s1] = model.dual.get(getattr(model, attribute)[s1].value)
+                    else:
+                        _dict[s1] = getattr(model, attribute)[s1]
             return pd.Series(_dict)
 
         else:

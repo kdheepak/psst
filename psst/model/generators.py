@@ -2,19 +2,30 @@ from pyomo.environ import *
 
 
 def initialize_generators(model,
-                        generator_names=None,
                         generator_at_bus=None):
 
-    model.Generators = Set(initialize=generator_names)
+    model.Generators = Set(initialize=model.ThermalGenerators | model.RenewableGenerators | model.HydroGenerators)
     model.GeneratorsAtBus = Set(model.Buses, initialize=generator_at_bus)
 
 
-def initialize_non_dispatchable_generators(model,
-                                        non_dispatchable_generator_names=None,
-                                        non_dispatchable_generator_at_bus=None):
+def initialize_thermal_generators(model,
+                        thermal_generator_names=None):
 
-    model.NonDispatchableGenerators = Set(initialize=non_dispatchable_generator_names)
-    model.NonDispatchableGeneratorsAtBus = Set(model.Buses, initialize=non_dispatchable_generator_at_bus)
+    model.ThermalGenerators = Set(initialize=thermal_generator_names)
+
+
+def initialize_renewable_generators(model,
+                                        renewable_generator_names=None,renewable_gen=None):
+
+    model.RenewableGenerators = Set(initialize=renewable_generator_names)
+    model.renewable_power = Param(model.RenewableGenerators, model.TimePeriods, initialize=renewable_gen, default=0.0, mutable=True)
+    
+def initialize_hydro_generators(model,
+                                        hydro_generator_names=None,hydro_gen=None):
+
+    model.HydroGenerators = Set(initialize=hydro_generator_names)    
+    model.hydro_power = Param(model.HydroGenerators, model.TimePeriods, initialize=hydro_gen, default=0.0, mutable=True)
+    
 
 def generation_maximum_power_init(model):
     for g, t in model.EnforceMaximumPower:
@@ -48,8 +59,8 @@ def maximum_minimum_power_output_generators(model, minimum_power_output=None, ma
 
     # TODO add validation that maximum power output is greater than minimum power output
 
-    model.MinimumPowerOutput = Param(model.Generators, model.TimePeriods, initialize=minimum_power_output, within=NonNegativeReals, default=0.0)
-    model.MaximumPowerOutput = Param(model.Generators, model.TimePeriods, initialize=maximum_power_output, within=NonNegativeReals, default=0.0)
+    model.MinimumPowerOutput = Param(model.Generators, initialize=minimum_power_output, within=NonNegativeReals, default=0.0)
+    model.MaximumPowerOutput = Param(model.Generators, initialize=maximum_power_output, within=NonNegativeReals, default=0.0)
 
 
 def maximum_minimim_power_output_non_dispatchable_generators(model, minimum_power_output=None, maximum_power_output=None):
@@ -115,6 +126,7 @@ def initial_state(model, initial_state=None,
                 ):
 
     model.UnitOnT0State = Param(model.Generators, within=Reals, initialize=initial_state, mutable=True)
+    
 
     def t0_unit_on_rule(m, g):
         return int(value(m.UnitOnT0State[g]) >= 1)
@@ -154,7 +166,7 @@ def hot_start_cold_start_costs(model,
     model.ShutdownCostCoefficient = Param(model.Generators, within=NonNegativeReals, default=0.0, initialize=shutdown_cost_coefficient) # units are $.
 
 
-def _minimum_production_cost_fn(m, g, t):
+def _minimum_production_cost_fn(m, g):
     # Minimum production cost (needed because Piecewise constraint on ProductionCost
     # has to have lower bound of 0, so the unit can cost 0 when off -- this is added
     # back in to the objective if a unit is on
@@ -163,16 +175,16 @@ def _minimum_production_cost_fn(m, g, t):
     elif len(m.CostPiecewisePoints[g]) == 1:
         # If there's only one piecewise point given, that point should be (MaxPower, MaxCost) -- i.e. the cost function is linear through (0,0),
         # so we can find the slope of the line and use that to compute the cost of running at minimum generation
-        return m.MinimumPowerOutput[g, t] * (m.CostPiecewiseValues[g].first() / m.MaximumPowerOutput[g]) * m.FuelCost[g]
+        return m.MinimumPowerOutput[g] * (m.CostPiecewiseValues[g].first() / m.MaximumPowerOutput[g]) * m.FuelCost[g]
     else:
         return  m.FuelCost[g] * \
                (m.ProductionCostA0[g] + \
-                m.ProductionCostA1[g] * m.MinimumPowerOutput[g, t] + \
-                m.ProductionCostA2[g] * m.MinimumPowerOutput[g, t]**2)
+                m.ProductionCostA1[g] * m.MinimumPowerOutput[g] + \
+                m.ProductionCostA2[g] * m.MinimumPowerOutput[g]**2)
 
 
 def minimum_production_cost(model, minimum_production_cost=_minimum_production_cost_fn):
-    model.MinimumProductionCost = Param(model.Generators, model.TimePeriods, within=NonNegativeReals, initialize=_minimum_production_cost_fn, mutable=True)
+    model.MinimumProductionCost = Param(model.Generators, within=NonNegativeReals, initialize=_minimum_production_cost_fn, mutable=True)
 
 
 def quadratic_cost_coefficients(model, production_cost_a=None, production_cost_b=None, production_cost_c=None):
@@ -214,7 +226,7 @@ def production_cost(model):
 
 
 def power_generation_piecewise_points_rule(m, g, t):
-    minimum_production_cost = value(m.MinimumProductionCost[g, t])
+    minimum_production_cost = value(m.MinimumProductionCost[g])
     if len(m.CostPiecewisePoints[g]) > 0:
         m.PowerGenerationPiecewisePoints[g,t] = list(m.CostPiecewisePoints[g])
         temp = list(m.CostPiecewiseValues[g])
@@ -235,8 +247,8 @@ def power_generation_piecewise_points_rule(m, g, t):
                 value(m.ProductionCostA1[g]) * m.PowerGenerationPiecewisePoints[g, t][1] \
                 - minimum_production_cost
     else:
-        min_power = value(m.MinimumPowerOutput[g, t])
-        max_power = value(m.MaximumPowerOutput[g, t])
+        min_power = value(m.MinimumPowerOutput[g])
+        max_power = value(m.MaximumPowerOutput[g])
         n = value(m.NumGeneratorCostCurvePieces)
         width = (max_power - min_power) / float(n)
         if width == 0:
