@@ -126,7 +126,7 @@ class NetworkModel(t.HasTraits):
         self.all_pos = pd.DataFrame(self.network.positions, index=['x', 'y']).T
 
         # Make full edges DF, with coordinates and branch index
-        self.all_edges = pd.DataFrame.from_records(self.G.edges(), columns=['start', 'end'])
+        self.all_edges = pd.DataFrame.from_records([(i, j) for i, j in self.G.edges()], columns=['start', 'end'])
         # ---> Add coordinates
         self.all_edges['start_x'] = self.all_edges['start'].map(
             lambda e: self.all_pos.loc[e]['x'])
@@ -220,7 +220,7 @@ class NetworkModel(t.HasTraits):
 
     def subset_edges(self):
         """Subset all_edges, with G.edges() info, based on view_buses list."""
-        edge_list = self.G.edges(nbunch=self.view_buses)  # get edges of view_buses as list of tuples
+        edge_list = list(self.G.edges(nbunch=self.view_buses))  # get edges of view_buses as list of tuples
         edges_fwd = self.all_edges.loc[edge_list]  # query all_pos with edge_list
         edge_list_rev = [tuple(reversed(tup)) for tup in edge_list]  # reverse tuples as order may be swapped in all_pos
         edges_rev = self.all_edges.loc[edge_list_rev]  # query all_pos again, with reversed edge_list
