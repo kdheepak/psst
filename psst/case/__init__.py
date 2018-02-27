@@ -207,6 +207,13 @@ class PSSTCase(object):
 
         return mpc
 
+    @property
+    def load_name(self):
+        # Todo: We may wish to replace this with something more robust.
+        names_raw = self.load.columns
+        names = names_raw.str.replace(pat='', repl='Load_', n=1)
+        return names
+
 
 read_matpower = PSSTCase._read_matpower
 read_festiv = PSSTCase._read_festiv

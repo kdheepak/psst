@@ -60,6 +60,13 @@ Use the navigation table on the sidebar to find documentation for users, develop
    dev/contributing
 
 .. toctree::
+   :maxdepth: 4
+   :caption: API
+   :hidden:
+
+   api_documentation
+
+.. toctree::
    :hidden:
    :caption: More
 

@@ -17,4 +17,5 @@ __pycache__
 .#*
 .coverage
 *.swp
+docs/_generate
 docs/readme.rst
