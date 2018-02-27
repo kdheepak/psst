@@ -8,7 +8,7 @@ Interactive Visualizations
 
 Network Graph
 ~~~~~~~~~~~~~
-The classes required to generate a navigable graph of the network
+For generating a navigable, exploratory graph of the power grid.
 
 .. currentmodule:: psst.network.graph
 .. autosummary::
@@ -17,3 +17,15 @@ The classes required to generate a navigable graph of the network
    NetworkModel
    NetworkViewBase
    NetworkView
+
+Generator Dispatch Plot
+~~~~~~~~~~~~~~~~~~~~~~~
+For generating interactive bar charts of generator dispatch.
+
+.. currentmodule:: psst.plot_bq
+.. autosummary::
+   :toctree: _generate/
+
+   GenDispatchBars
+   GenDispatchFigure
+   GenDispatchWidget
