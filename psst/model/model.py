@@ -63,17 +63,17 @@ def initialize_model(model,
 
     model.TotalDemand = Var(model.TimePeriods, within=NonNegativeReals)
 
-    BigPenalty = config.pop('penalty', 1e6)
+    BigPenalty = config.pop('penalty', 1e7)
     #\Lambda
     model.LoadMismatchPenalty = Param(within=NonNegativeReals, default=BigPenalty)
 
     # amount of power produced by each generator, at each time period.
     def power_bounds_rule(m, g, t):
-        return (0, m.MaximumPowerOutput[g]) 
+        return (0, m.MaximumPowerOutput[g, t])
     model.PowerGenerated = Var(model.Generators, model.TimePeriods, within=NonNegativeReals, bounds=power_bounds_rule)
 
     # maximum power output for each generator, at each time period.
-    model.MaximumPowerAvailable = Var(model.Generators, model.TimePeriods, within=NonNegativeReals)
+    model.MaximumPowerAvailable = Var(model.Generators, model.TimePeriods, within=NonNegativeReals, bounds=power_bounds_rule)
 
     # voltage angles at the buses (S) (lock the first bus at 0) in radians
     model.Angle = Var(model.Buses, model.TimePeriods, within=Reals, bounds=(-3.14159265,3.14159265))

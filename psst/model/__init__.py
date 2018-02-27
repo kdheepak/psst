@@ -39,6 +39,8 @@ def build_model(case,
                 branch_df=None,
                 bus_df=None,
                 previous_unit_commitment_df=None,
+                timeseries_pmax=None,
+                timeseries_pmin=None,
                 base_MVA=None,
                 base_KV=1,
                 config=None):
@@ -79,7 +81,17 @@ def build_model(case,
         warnings.warn("Generators with zero PMAX found: {}".format(zero_generation))
     generator_df.loc[generator_df['PMAX'] == 0, 'PMAX'] = 0.01
 
-    generator_df['RAMP'] = generator_df['RAMP_10'] * 6
+    try:
+        generator_df['RAMP'] = generator_df['RAMP_AGC']
+    except Exception as e:
+        logger.exception("Unable to set ramp rates to ramp_agc: {}".format(e))
+        generator_df['RAMP'] = generator_df['RAMP_10']
+
+    if timeseries_pmax is None:
+        timeseries_pmax = generator_df["PMAX"].to_dict()
+
+    if timeseries_pmin is None:
+        timeseries_pmin = generator_df["PMIN"].to_dict()
 
     # Build model information
 
@@ -109,14 +121,39 @@ def build_model(case,
     for i, g in generator_df.iterrows():
         generator_at_bus[g['GEN_BUS']].append(i)
 
-    initialize_generators(model,
-                        generator_names=generator_df.index,
-                        generator_at_bus=generator_at_bus)
+    initialize_generators(
+        model,
+        generator_names=generator_df.index,
+        generator_at_bus=generator_at_bus
+    )
     fuel_cost(model)
 
-    maximum_minimum_power_output_generators(model,
-                                        minimum_power_output=generator_df['PMIN'].to_dict(),
-                                        maximum_power_output=generator_df['PMAX'].to_dict())
+    def initialize_maximum_power_output(m, g, t):
+        number_of_hours = len(load_df.index)
+        v = timeseries_pmax[g]
+        try:
+            len(v)
+        except:
+            v = [v for i in range(0, number_of_hours)]
+
+        assert len(v) == number_of_hours, "Expected number of elements for generator {g} = {number_of_hours} but found {l}".format(g=g, number_of_hours=number_of_hours, l=len(v))
+        return v[t]
+
+    def initialize_minimum_power_output(m, g, t):
+        number_of_hours = len(load_df.index)
+        v = timeseries_pmin[g]
+        try:
+            len(v)
+        except:
+            v = [v for i in range(0, number_of_hours)]
+
+        assert len(v) == number_of_hours, "Expected number of elements for generator {g} = {number_of_hours} but found {l}".format(g=g, number_of_hours=number_of_hours, l=len(v))
+        return v[t]
+
+    maximum_minimum_power_output_generators(
+        model,
+        minimum_power_output=initialize_minimum_power_output,
+        maximum_power_output=initialize_maximum_power_output)
 
     ramp_up_ramp_down_limits(model, ramp_up_limits=generator_df['RAMP'].to_dict(), ramp_down_limits=generator_df['RAMP'].to_dict())
 
@@ -131,7 +168,7 @@ def build_model(case,
     if previous_unit_commitment_df is None:
         previous_unit_commitment = dict()
         for g in generator_df.index:
-            previous_unit_commitment[g] = [0] * len(load_df)
+            previous_unit_commitment[g] = [1] * len(load_df)
         previous_unit_commitment_df = pd.DataFrame(previous_unit_commitment)
         previous_unit_commitment_df.index = load_df.index
 
@@ -163,7 +200,6 @@ def build_model(case,
     # TODO : Add segments to config
 
     for i, g in generator_df.iterrows():
-
 
         if g['MODEL'] == 2:
 
@@ -205,12 +241,19 @@ def build_model(case,
             points[i] = p
             values[i] = v
 
+    zero_cost_generators = []
     for k, v in points.items():
         points[k] = [float(i) for i in v]
         assert len(points[k]) >= 2, "Points must be of length 2 but instead found {points} for {genco}".format(points=points[k], genco=k)
     for k, v in values.items():
         values[k] = [float(i) for i in v]
         assert len(values[k]) >= 2, "Values must be of length 2 but instead found {values} for {genco}".format(values=values[k], genco=k)
+        if any(values[k]) is False:
+            zero_cost_generators.append(k)
+
+    for g in zero_cost_generators:
+        points[g] = [min(points[g]), max(points[g])]
+        values[g] = [min(values[g]), max(values[g])]
 
     piece_wise_linear_cost(model, points, values)
 
@@ -296,19 +339,22 @@ class PSSTModel(object):
 
         return string
 
-    def solve(self, solver='glpk', verbose=False, keepfiles=False, resolve=False, **kwargs):
+    def solve(self, solver='glpk', verbose=False, keepfiles=False, **kwargs):
         if solver == 'xpress':
-            resolve = True
+            resolve = kwargs.pop("resolve", True)
+        else:
+            resolve = kwargs.pop("resolve", False)
 
         solve_model(self._model, solver=solver, verbose=verbose, keepfiles=keepfiles, **kwargs)
         self._results = PSSTResults(self)
 
-        if resolve:
+        if resolve is True:
+            logger.info("Resolving")
             for t, row in self.results.unit_commitment.iterrows():
                 for g, v in row.iteritems():
                     if not pd.isnull(v):
                         self._model.UnitOn[g, t].fixed = True
-                        self._model.UnitOn[g, t] = int(float(v))
+                        self._model.UnitOn[g, t] = int(float(round(v)))
 
             solve_model(self._model, solver=solver, verbose=verbose, keepfiles=keepfiles, is_mip=False, **kwargs)
             self._results = PSSTResults(self)
