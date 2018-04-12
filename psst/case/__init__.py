@@ -40,7 +40,7 @@ class PSSTCase(object):
         if filename is not None:
             self._filename = filename
         else:
-            self._filename = os.path.join(current_directory, '..', 'cases', 'case.m')
+            self._filename = os.path.join(current_directory, '../docs/notebooks/cases/case1.m')
         if mode == 'r' or mode == 'read':
             self._read_matpower(self)
 
@@ -130,12 +130,12 @@ class PSSTCase(object):
     def _read_festiv(cls, mpc):
         if not isinstance(mpc, cls):
             filename = mpc
-            mpc = cls(filename=os.path.abspath(os.path.join(current_directory, '../../cases/case.m')))
+            mpc = cls(filename=os.path.abspath(os.path.join(current_directory, '../../docs/notebooks/cases/case1.m')))
 
         config = dict()
-        config['SYSTEM'] = pd.read_excel(filename, sheetname='SYSTEM', index_col=0, header=None, skiprows=1).to_dict()[1]
+        config['SYSTEM'] = pd.read_excel(filename, sheet_name='SYSTEM', index_col=0, header=None, skiprows=1).to_dict()[1]
 
-        gen = pd.read_excel(filename, sheetname='GEN')
+        gen = pd.read_excel(filename, sheet_name='GEN')
 
         for name, row in gen.iterrows():
             mpc.gen.loc[name] = mpc.gen.loc['GenCo0']
@@ -146,7 +146,7 @@ class PSSTCase(object):
 
         mpc.gen['PMAX'] = gen['CAPACITY']
 
-        gencost = pd.read_excel(filename, sheetname='COST')
+        gencost = pd.read_excel(filename, sheet_name='COST')
 
         number_of_segments = int(len(gencost.columns) / 2 / 2)
 
@@ -165,7 +165,7 @@ class PSSTCase(object):
             for i in range(0, n):
                 r['COST_{}'.format((i * 2) + 1)] = r['COST_{}'.format((i * 2) + 1)] * r['COST_{}'.format(i * 2)]
 
-        genbus = pd.read_excel(filename, sheetname='GENBUS')
+        genbus = pd.read_excel(filename, sheet_name='GENBUS')
 
         genbus = pd.concat([genbus['GENBUS'].str.split('.').apply(lambda x: x[1]), genbus['GENBUS'].str.split('.').apply(lambda x: x[0])], axis=1)
         genbus.columns = ['GEN', 'BUS']
@@ -173,7 +173,7 @@ class PSSTCase(object):
 
         mpc.gen.loc[genbus['BUS'].index, 'GEN_BUS'] = genbus['BUS']
 
-        bus = pd.read_excel(filename, sheetname='BUS')
+        bus = pd.read_excel(filename, sheet_name='BUS')
         for i, b in enumerate(bus['BUSES'].unique()):
             if i == 0:
                 bus = 'Bus1'
@@ -184,7 +184,7 @@ class PSSTCase(object):
         mpc.bus = mpc.bus.drop('Bus1')
         mpc.bus = mpc.bus.drop('Bus2')
 
-        branch = pd.read_excel(filename, sheetname='BRANCHDATA')
+        branch = pd.read_excel(filename, sheet_name='BRANCHDATA')
 
         for i, row in branch.iterrows():
             mpc.branch.loc[i] = mpc.branch.loc[0]

@@ -397,7 +397,7 @@ class GeneratorCostView(ipyw.VBox):
         t.link((self._lines, 'x'), (self._scatter, 'x'))
         t.link((self._lines, 'y'), (self._scatter, 'y'))
 
-        # self._scatter.observe(self._callback_ydata, names=['y'])
+        self._scatter.observe(self._callback_ydata, names=['y'])
 
         with self._scatter.hold_sync():
             self._scatter.enable_move = True

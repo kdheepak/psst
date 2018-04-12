@@ -39,7 +39,8 @@ class PSSTNetwork(object):
         self.regenerate_network(load_names=False, gen_names=False)
 
         swing_bus = self.swing_bus
-        bus_distance_matrix_df = pd.DataFrame(nx.shortest_path_length(self.graph))
+        bus_distance_matrix_df = pd.DataFrame([j for i, j in nx.shortest_path_length(self.graph)])
+        bus_distance_matrix_df.index = [i for i, j in nx.shortest_path_length(self.graph)]
 
         pos = dict()
         for k, v in bus_distance_matrix_df.loc[swing_bus].sort_values().to_dict().items():
